@@ -19,6 +19,7 @@ except FileNotFoundError:
     print(f"Bluetooth address file not found: {bt_addr_path}")
     bt_addr = None
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 try:
@@ -26,6 +27,19 @@ try:
 except OSError:
     print("Tray already running.")
     sys.exit(0)
+
+def is_connected():
+    if not bt_addr:
+        return False
+    try:
+        output = subprocess.check_output(
+            ["bluetoothctl", "info", bt_addr],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        return "Connected: yes" in output
+    except subprocess.CalledProcessError:
+        return False
 
 def get_noise_control_state():
     try:
@@ -60,8 +74,9 @@ def get_battery_percent(which):
     return "?"
 
 def safe_pixmap(path, size):
-    if os.path.exists(path):
-        return QPixmap(path).scaled(size, size, Qt.KeepAspectRatio)
+    full_path = os.path.join(SCRIPT_DIR, path)
+    if os.path.exists(full_path):
+        return QPixmap(full_path).scaled(size, size, Qt.KeepAspectRatio)
     else:
         return QPixmap(size, size)
 
@@ -83,12 +98,12 @@ class ControlWindow(QWidget):
 
         self.left_img = QLabel()
         self.left_img.setPixmap(safe_pixmap("images/left.png", 64))
-        self.left_label = QLabel(get_battery_percent("left"))
+        self.left_label = QLabel("?")
         self.left_label.setAlignment(Qt.AlignCenter)
 
         self.right_img = QLabel()
         self.right_img.setPixmap(safe_pixmap("images/right.png", 64))
-        self.right_label = QLabel(get_battery_percent("right"))
+        self.right_label = QLabel("?")
         self.right_label.setAlignment(Qt.AlignCenter)
 
         left_col = QVBoxLayout()
@@ -116,9 +131,9 @@ class ControlWindow(QWidget):
             "off": QPushButton(),
         }
 
-        self.buttons["active"].setIcon(QIcon("images/anc.png"))
-        self.buttons["aware"].setIcon(QIcon("images/transparency.png"))
-        self.buttons["off"].setIcon(QIcon("images/off.png"))
+        self.buttons["active"].setIcon(QIcon(os.path.join(SCRIPT_DIR, "images/anc.png")))
+        self.buttons["aware"].setIcon(QIcon(os.path.join(SCRIPT_DIR, "images/transparency.png")))
+        self.buttons["off"].setIcon(QIcon(os.path.join(SCRIPT_DIR, "images/off.png")))
 
         for mode, btn in self.buttons.items():
             btn.setIconSize(QSize(48, 48))
@@ -128,7 +143,7 @@ class ControlWindow(QWidget):
 
         layout.addLayout(button_layout)
 
-        self.state_label = QLabel()
+        self.state_label = QLabel("Device not connected")
         self.state_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.state_label)
 
@@ -136,13 +151,24 @@ class ControlWindow(QWidget):
         self.update_state_label()
 
     def update_state_label(self):
+        if not is_connected():
+            self.state_label.setText("Device not connected")
+            tray.setToolTip("Device not connected")
+            for btn in self.buttons.values():
+                btn.setEnabled(False)
+            self.left_label.setText("?")
+            self.right_label.setText("?")
+            return
+
+        for btn in self.buttons.values():
+            btn.setEnabled(True)
+
         state = get_noise_control_state()
         self.state_label.setText(f"Noise Control: {state.capitalize()}")
         tray.setToolTip(f"Noise Control: {state.capitalize()}")
 
         for btn in self.buttons.values():
             btn.setStyleSheet("")
-
         if state in self.buttons:
             self.buttons[state].setStyleSheet(
                 "border: 2px solid #4CAF50; border-radius: 6px;"
@@ -160,7 +186,12 @@ def toggle_window():
 app = QApplication(sys.argv)
 app.setQuitOnLastWindowClosed(False)
 
-tray = QSystemTrayIcon(QIcon.fromTheme("audio-headphones"))
+icon = QIcon.fromTheme("audio-headphones")
+if icon.isNull():
+    icon_path = os.path.join(SCRIPT_DIR, "images", "headphones.png")
+    icon = QIcon(icon_path)
+
+tray = QSystemTrayIcon(icon)
 tray_menu = QMenu()
 toggle_action = QAction("Toggle Window")
 toggle_action.triggered.connect(toggle_window)
